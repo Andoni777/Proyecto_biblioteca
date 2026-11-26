@@ -10,11 +10,10 @@
 #include <string.h>
 #include <sys/shm.h>
 #include <sys/mman.h>
+#include <fcntl.h>
 
 #define SHM_NAME "/shm_biblioteca"
-
-int *shm_ejemplar;
-int fd_shm;
+#define SHM_SIZE sizeof(int)
 
 // Creacion de semaforos
 sem_t *sem1;
@@ -65,8 +64,7 @@ void* registro(void* arg) {
 
     printf("[Hilo Registro] Registrando préstamo del ejemplar nº%d...\n", num_solicitud);
     sleep(tiempo_aleatorio(1, 2));
-    printf("[Hilo Registro] Préstamo del ejemplar nº%d registrado. Notificando al mostrador...\n", num_solicitud);
-    sem_post(sem3);
+    printf("[Hilo Registro] Préstamo del ejemplar nº%d registrado\n", num_solicitud);
 
     return NULL;
 }
@@ -110,9 +108,25 @@ int main(int argc, char* argv[]) {
 
     
     //creación de memoria compartida
-    fd_shm = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0644);
-    ftruncate(fd_shm, sizeof(int));
-    shm_ejemplar = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm, 0);
+    int fd_shm = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0644);
+
+    if (fd_shm == -1) {
+        perror("Error al crear la memoria compartida");
+        exit(EXIT_FAILURE);
+    }
+
+    if (ftruncate(fd_shm, SHM_SIZE) == -1) {
+        perror("Error al truncar la memoria compartida");
+        exit(EXIT_FAILURE);
+    }
+    int *shm_ejemplar = mmap(NULL, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm, 0);
+
+    if (shm_ejemplar == MAP_FAILED) {
+        perror("Error al mapear la memoria compartida");
+        exit(EXIT_FAILURE);
+    } else {
+        close(fd_shm);
+    }
 
     sigset_t set_urs1;
     sigemptyset(&set_urs1);
@@ -130,6 +144,13 @@ int main(int argc, char* argv[]) {
 
 
             printf("[Proceso Padre] Ejecución finalizada.\n");
+
+            
+
+            //Después de que ambos hijos hayan terminado, el padre debe llamar a munmap 
+            //para quitar su propio mapeo y a shm_unlink para eliminar el nombre del objeto 
+            //compartido.
+
         } else {
             /* Proceso Depósito */
             printf("[Proceso Depósito] Comienzo mi ejecución...\n");
@@ -156,7 +177,10 @@ int main(int argc, char* argv[]) {
                 pthread_join(hilo_extraccion, NULL);
                 pthread_join(hilo_registro, NULL);
 
-                *shm_ejemplar = num_solicitud; //escribe el ID en la memoria compartida
+                //escribir en memoria compartida
+                *shm_ejemplar = num_solicitud;
+                printf("[Proceso Depósito] Escrito en memoria compartida: %d\n", num_solicitud);
+                sem_post(sem3);
                 kill(pid_mostrador, SIGUSR1);
 
                 printf("[Proceso Depósito] Solicitud nº %d finalizada.\n", num_solicitud);
@@ -177,10 +201,9 @@ int main(int argc, char* argv[]) {
             // Esperar a que el depósito le notifique que la solicitud ha sido procesada
 
             int sig;
-            sigwait(&set_urs1, &sig);   // Espera a que el depósito le notifique que la solicitud ha sido procesada
-            printf("[Proceso Mostrador] Solicitud nº %d procesada. Ejemplar listo para entrega.\n", num_solicitud);
-
+            sigwait(&set_urs1, &sig);
             sem_wait(sem3);
+            printf("[Proceso Mostrador] Solicitud nº %d procesada. Ejemplar listo para entrega.\n", *shm_ejemplar);
 
             num_solicitud++;
 
