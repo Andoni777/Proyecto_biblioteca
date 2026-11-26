@@ -13,7 +13,8 @@
 #include <fcntl.h>
 
 #define SHM_NAME "/shm_biblioteca"
-#define SHM_SIZE sizeof(int)
+#define MAX_LIBROS 50 
+#define SHM_SIZE (sizeof(int) * MAX_LIBROS)
 
 // Creacion de semaforos
 sem_t *sem1;
@@ -177,8 +178,9 @@ int main(int argc, char* argv[]) {
                 pthread_join(hilo_extraccion, NULL);
                 pthread_join(hilo_registro, NULL);
 
-                //escribir en memoria compartida
-                *shm_ejemplar = num_solicitud;
+                // Escribir en memoria compartida (funcionamiento circular)
+                shm_ejemplar[num_solicitud % MAX_LIBROS] = num_solicitud;
+
                 printf("[Proceso Depósito] Escrito en memoria compartida: %d\n", num_solicitud);
                 sem_post(sem3);
                 kill(pid_mostrador, SIGUSR1);
@@ -203,7 +205,7 @@ int main(int argc, char* argv[]) {
             int sig;
             sigwait(&set_urs1, &sig);
             sem_wait(sem3);
-            printf("[Proceso Mostrador] Solicitud nº %d procesada. Ejemplar listo para entrega.\n", *shm_ejemplar);
+            printf("[Proceso Mostrador] Solicitud nº %d procesada. Ejemplar listo para entrega.\n", shm_ejemplar[num_solicitud % MAX_LIBROS]);
 
             num_solicitud++;
 
