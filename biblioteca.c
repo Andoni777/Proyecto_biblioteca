@@ -10,8 +10,14 @@
 #include <sys/shm.h>
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <time.h>
 
 #define SHM_NAME "/shm_biblioteca"
+#define MQ_NAME "/cola_solicitudes"
+#define SEM1_NAME "/semaforo_1"
+#define SEM2_NAME "/semaforo_2"
+#define SEM3_NAME "/semaforo_3"
+
 #define MAX_LIBROS 50 
 #define SHM_SIZE (sizeof(int) * MAX_LIBROS)
 
@@ -37,31 +43,35 @@ void* busqueda(void* arg) {
     printf("[Hilo Búsqueda] Buscando ejemplar nº%d...\n", num_solicitud);
     sleep(tiempo_aleatorio(1, 3));
     printf("[Hilo Busqueda] Ejemplar nº%d localizado. Enviando a extracción...\n", num_solicitud);
-    sem_post(sem1);
+    
+    sem_post(sem1); // Avisar al hilo de extracción
 
     return NULL;
 }
 
 void* extraccion(void* arg) {
-    sem_wait(sem1);
+
     int num_solicitud = *(int *)arg;
 
     printf("[Hilo Extracción] Comienzo mi ejecución...\n");
-
+    sem_wait(sem1); // Esperar a que búsqueda termine
+    
     printf("[Hilo Extracción] Extrayendo ejemplar nº%d de la estantería...\n", num_solicitud);
     sleep(tiempo_aleatorio(2, 4));
     printf("[Hilo Extracción] Ejemplar nº%d extraído. Enviando a registro...\n", num_solicitud);
-    sem_post(sem2);
+    
+    sem_post(sem2); // Avisar al hilo de registro
 
     return NULL;
 }
 
 void* registro(void* arg) {
-    sem_wait(sem2);
+    
     int num_solicitud = *(int *)arg;
 
     printf("[Hilo Registro] Comienzo mi ejecución...\n");
-
+    sem_wait(sem2); // Esperar a que extracción termine
+    
     printf("[Hilo Registro] Registrando préstamo del ejemplar nº%d...\n", num_solicitud);
     sleep(tiempo_aleatorio(1, 2));
     printf("[Hilo Registro] Préstamo del ejemplar nº%d registrado\n", num_solicitud);
@@ -136,15 +146,31 @@ int main(int argc, char* argv[]) {
             /* Proceso padre */
 
             printf("[Proceso Padre] Esperando a que terminen mis hijos...\n");
-
+            
+            // Esperar a ambos hijos
+            waitpid(pid_mostrador, NULL, 0);
+            waitpid(pid_deposito, NULL, 0);
 
             printf("[Proceso Padre] Ejecución finalizada.\n");
 
             
-
             //Después de que ambos hijos hayan terminado, el padre debe llamar a munmap 
             //para quitar su propio mapeo y a shm_unlink para eliminar el nombre del objeto 
             //compartido.
+            munmap(shm_ejemplar, SHM_SIZE);
+            shm_unlink(SHM_NAME);
+
+            // Cerrar y eliminar semáforos
+            sem_close(sem1);
+            sem_close(sem2);
+            sem_close(sem3);
+            sem_unlink(SEM1_NAME);
+            sem_unlink(SEM2_NAME);
+            sem_unlink(SEM3_NAME);
+
+            // Cerrar y eliminar cola de mensajes
+            mq_close(cola);
+            mq_unlink(MQ_NAME);
 
         } else {
             /* Proceso Depósito */
@@ -180,6 +206,12 @@ int main(int argc, char* argv[]) {
 
                 printf("[Proceso Depósito] Solicitud nº %d finalizada.\n", num_solicitud);
             }
+            // Limpieza local del hijo antes de salir
+            munmap(shm_ejemplar, SHM_SIZE);
+            sem_close(sem1);
+            sem_close(sem2);
+            sem_close(sem3);
+            mq_close(cola);
         }
     } else {
         /* Proceso Mostrador */
@@ -201,6 +233,9 @@ int main(int argc, char* argv[]) {
             num_solicitud++;
 
         }
+        
+        sem_close(sem3);
+        mq_close(cola);
     }
 
     exit(0);
