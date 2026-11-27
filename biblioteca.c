@@ -3,7 +3,6 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <unistd.h>
-#include <signal.h>
 #include <sys/wait.h>
 #include <stdbool.h>
 #include <mqueue.h>
@@ -129,11 +128,6 @@ int main(int argc, char* argv[]) {
         close(fd_shm);
     }
 
-    sigset_t set_urs1;
-    sigemptyset(&set_urs1);
-    sigaddset(&set_urs1, SIGUSR1);
-    sigprocmask(SIG_BLOCK, &set_urs1, NULL);
-
     pid_mostrador = fork();
 
     if (pid_mostrador != 0) {
@@ -183,7 +177,6 @@ int main(int argc, char* argv[]) {
 
                 printf("[Proceso Depósito] Escrito en memoria compartida: %d\n", num_solicitud);
                 sem_post(sem3);
-                kill(pid_mostrador, SIGUSR1);
 
                 printf("[Proceso Depósito] Solicitud nº %d finalizada.\n", num_solicitud);
             }
@@ -202,8 +195,6 @@ int main(int argc, char* argv[]) {
 
             // Esperar a que el depósito le notifique que la solicitud ha sido procesada
 
-            int sig;
-            sigwait(&set_urs1, &sig);
             sem_wait(sem3);
             printf("[Proceso Mostrador] Solicitud nº %d procesada. Ejemplar listo para entrega.\n", shm_ejemplar[num_solicitud % MAX_LIBROS]);
 
