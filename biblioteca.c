@@ -17,7 +17,6 @@
 #define MQ_NAME "/cola_solicitudes"
 #define SEM1_NAME "/semaforo_1"
 #define SEM2_NAME "/semaforo_2"
-#define SEM3_NAME "/semaforo_3"
 
 #define MAX_LIBROS 50 
 #define SHM_SIZE (sizeof(int) * MAX_LIBROS)
@@ -25,7 +24,6 @@
 // Creacion de semaforos
 sem_t *sem1;
 sem_t *sem2;
-sem_t *sem3;
 //
 //Declaracion de la cola
 mqd_t cola;
@@ -34,6 +32,12 @@ pid_t pid_mostrador, pid_deposito;
 
 // Variables globales para el control de señales
 volatile sig_atomic_t finalizar = 0;
+volatile sig_atomic_t ejemplar_listo = 0;
+
+// Señal de ejemplar listo
+void tratamiento_sigusr1(int signum) {
+    ejemplar_listo = 1;
+}
 
 // Para SIGINT (Ctrl + C)
 void tratamiento_sigint(int signum) {
@@ -93,21 +97,15 @@ int main(int argc, char* argv[]) {
     // Registrar captura de SIGINT antes del fork para que la hereden los hijos
     signal(SIGINT, tratamiento_sigint);
     // Apertura de semaforos
-    sem1 = sem_open("/semaforo_1", O_CREAT, 0644, 0);
+    sem1 = sem_open(SEM1_NAME, O_CREAT, 0644, 0);
     if (sem1 == SEM_FAILED) {
         perror("Error al crear sem1");
         exit(EXIT_FAILURE);
     }
 
-    sem2 = sem_open("/semaforo_2", O_CREAT, 0644, 0);
+    sem2 = sem_open(SEM2_NAME, O_CREAT, 0644, 0);
     if (sem2 == SEM_FAILED) {
         perror("Error al crear sem2");
-        exit(EXIT_FAILURE);
-    }
-
-    sem3 = sem_open("/semaforo_3", O_CREAT, 0644, 0);
-    if (sem3 == SEM_FAILED) {
-        perror("Error al crear sem3");
         exit(EXIT_FAILURE);
     }
     //
@@ -120,7 +118,7 @@ int main(int argc, char* argv[]) {
     atributos.mq_msgsize = sizeof(int);
     atributos.mq_curmsgs = 0;
 
-    cola = mq_open("/cola_solicitudes", O_CREAT | O_RDWR, 0644, &atributos);
+    cola = mq_open(MQ_NAME, O_CREAT | O_RDWR, 0644, &atributos);
 
     if (cola == (mqd_t)-1) {
         perror("Error al crear la cola");
@@ -161,13 +159,18 @@ int main(int argc, char* argv[]) {
             printf("[Proceso Padre] Esperando a que terminen mis hijos...\n");
             
             // Si waitpid se interrumpe al llegar SIGINT, vuelve a esperar a que termine cada hijo
-            while (waitpid(pid_mostrador, NULL, 0) == -1 && finalizar) {
-                finalizar = 0;
+            while (waitpid(pid_mostrador, NULL, 0) == -1) {
+                if(!finalizar){
+                    perror("Error esperando al proceso Mostrador");
+                    break;
+                }
             }
-            while (waitpid(pid_deposito, NULL, 0) == -1 && finalizar) {
-                finalizar = 0;
+            while (waitpid(pid_deposito, NULL, 0) == -1) {
+                if(!finalizar){
+                    perror("Error esperando al proceso Deposito");
+                    break;
+                }
             }
-
 
             printf("[Proceso Padre] Ejecución finalizada.\n");
 
@@ -181,10 +184,8 @@ int main(int argc, char* argv[]) {
             // Cerrar y eliminar semáforos
             sem_close(sem1);
             sem_close(sem2);
-            sem_close(sem3);
             sem_unlink(SEM1_NAME);
             sem_unlink(SEM2_NAME);
-            sem_unlink(SEM3_NAME);
 
             // Cerrar y eliminar cola de mensajes
             mq_close(cola);
@@ -196,9 +197,12 @@ int main(int argc, char* argv[]) {
             
             while(!finalizar) {
                 int num_solicitud;
-                
-                // Esperar una solicitud del mostrador
-                mq_receive(cola, (char *)&num_solicitud, sizeof(num_solicitud), NULL);
+                // Esperar una solicitud del mostrador y comprobar interrupciones
+                if (mq_receive(cola, (char *)&num_solicitud, sizeof(num_solicitud), NULL) == -1) {
+                    if (finalizar) break;
+                    perror("Error en mq_receive");
+                    continue;
+                }
 
                 printf("[Proceso Depósito] Recibida solicitud nº %d\n", num_solicitud);
 
@@ -220,7 +224,7 @@ int main(int argc, char* argv[]) {
                 shm_ejemplar[num_solicitud % MAX_LIBROS] = num_solicitud;
 
                 printf("[Proceso Depósito] Escrito en memoria compartida: %d\n", num_solicitud);
-                sem_post(sem3);
+                kill(pid_mostrador, SIGUSR1);
 
                 printf("[Proceso Depósito] Solicitud nº %d finalizada.\n", num_solicitud);
             }
@@ -228,11 +232,12 @@ int main(int argc, char* argv[]) {
             munmap(shm_ejemplar, SHM_SIZE);
             sem_close(sem1);
             sem_close(sem2);
-            sem_close(sem3);
             mq_close(cola);
         }
     } else {
         /* Proceso Mostrador */
+        
+        signal(SIGUSR1, tratamiento_sigusr1);   //Capturamos señal
         printf("[Proceso Mostrador] Comienzo mi ejecución...\n");
         int num_solicitud = 0;
 
@@ -243,9 +248,18 @@ int main(int argc, char* argv[]) {
             mq_send(cola, (char *)&num_solicitud,
             sizeof(num_solicitud), 0);
 
+            while (!ejemplar_listo && !finalizar) {
+                pause();
+            }
+
+            if (finalizar){
+                break;
+            }
+
+            ejemplar_listo = 0;
+
             // Esperar a que el depósito le notifique que la solicitud ha sido procesada
 
-            sem_wait(sem3);
             printf("[Proceso Mostrador] Solicitud nº %d procesada. Ejemplar listo para entrega.\n", shm_ejemplar[num_solicitud % MAX_LIBROS]);
 
             
@@ -253,7 +267,9 @@ int main(int argc, char* argv[]) {
 
         }
         
-        sem_close(sem3);
+        munmap(shm_ejemplar, SHM_SIZE);
+        sem_close(sem1);
+        sem_close(sem2);
         mq_close(cola);
     }
 
