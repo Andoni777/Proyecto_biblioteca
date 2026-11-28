@@ -11,6 +11,7 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <time.h>
+#include <signal.h>
 
 #define SHM_NAME "/shm_biblioteca"
 #define MQ_NAME "/cola_solicitudes"
@@ -30,6 +31,15 @@ sem_t *sem3;
 mqd_t cola;
 //
 pid_t pid_mostrador, pid_deposito;
+
+// Variables globales para el control de señales
+volatile sig_atomic_t finalizar = 0;
+
+// Para SIGINT (Ctrl + C)
+void tratamiento_sigint(int signum) {
+    signal(SIGINT, tratamiento_sigint);
+    finalizar = 1;
+}
 
 int tiempo_aleatorio(int min, int max) {
     return rand() % (max - min + 1) + min;
@@ -80,6 +90,8 @@ void* registro(void* arg) {
 }
 
 int main(int argc, char* argv[]) {
+    // Registrar captura de SIGINT antes del fork para que la hereden los hijos
+    signal(SIGINT, tratamiento_sigint);
     // Apertura de semaforos
     sem1 = sem_open("/semaforo_1", O_CREAT, 0644, 0);
     if (sem1 == SEM_FAILED) {
@@ -138,6 +150,7 @@ int main(int argc, char* argv[]) {
         close(fd_shm);
     }
 
+    // Creación de procesos hijos
     pid_mostrador = fork();
 
     if (pid_mostrador != 0) {
