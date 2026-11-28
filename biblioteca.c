@@ -160,9 +160,14 @@ int main(int argc, char* argv[]) {
 
             printf("[Proceso Padre] Esperando a que terminen mis hijos...\n");
             
-            // Esperar a ambos hijos
-            waitpid(pid_mostrador, NULL, 0);
-            waitpid(pid_deposito, NULL, 0);
+            // Si waitpid se interrumpe al llegar SIGINT, vuelve a esperar a que termine cada hijo
+            while (waitpid(pid_mostrador, NULL, 0) == -1 && finalizar) {
+                finalizar = 0;
+            }
+            while (waitpid(pid_deposito, NULL, 0) == -1 && finalizar) {
+                finalizar = 0;
+            }
+
 
             printf("[Proceso Padre] Ejecución finalizada.\n");
 
@@ -189,7 +194,7 @@ int main(int argc, char* argv[]) {
             /* Proceso Depósito */
             printf("[Proceso Depósito] Comienzo mi ejecución...\n");
             
-            while(1) {
+            while(!finalizar) {
                 int num_solicitud;
                 
                 // Esperar una solicitud del mostrador
@@ -211,7 +216,7 @@ int main(int argc, char* argv[]) {
                 pthread_join(hilo_extraccion, NULL);
                 pthread_join(hilo_registro, NULL);
 
-                // Escribir en memoria compartida (funcionamiento circular)
+                // Escribir en memoria compartida 
                 shm_ejemplar[num_solicitud % MAX_LIBROS] = num_solicitud;
 
                 printf("[Proceso Depósito] Escrito en memoria compartida: %d\n", num_solicitud);
@@ -231,7 +236,7 @@ int main(int argc, char* argv[]) {
         printf("[Proceso Mostrador] Comienzo mi ejecución...\n");
         int num_solicitud = 0;
 
-        while (1) {
+        while (!finalizar) {
             
             sleep(tiempo_aleatorio(3, 8));
             printf("[Proceso Mostrador] Recibida solicitud de préstamo nº %d. Enviando al depósito...\n", num_solicitud);
@@ -243,6 +248,7 @@ int main(int argc, char* argv[]) {
             sem_wait(sem3);
             printf("[Proceso Mostrador] Solicitud nº %d procesada. Ejemplar listo para entrega.\n", shm_ejemplar[num_solicitud % MAX_LIBROS]);
 
+            
             num_solicitud++;
 
         }
